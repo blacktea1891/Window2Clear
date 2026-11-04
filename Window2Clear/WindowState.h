@@ -81,6 +81,47 @@ public:
     WindowStateManager(const WindowStateManager&) = delete;
     WindowStateManager& operator=(const WindowStateManager&) = delete;
     bool hideTaskbar = false;
+    HWND ClickTarget() {
+        auto it = states.find(clickTarget);
+        return it != states.end() && Valid(it->first, it->second) && it->second.click ? it->first : nullptr;
+    }
+    // Queue ordinary wheel input without activating the reader or touching keyboard focus.
+    // Only claim a physical wheel event if the reader is actually exposed at the pointer.
+    bool ForwardWheel(UINT message, short delta, POINT point, WORD keys, bool hoverOnly = true) {
+        HWND hwnd = ClickTarget();
+        if (!hwnd || !IsWindowVisible(hwnd) || IsIconic(hwnd) ||
+            (message != WM_MOUSEWHEEL && message != WM_MOUSEHWHEEL)) return false;
+        RECT rect;
+        if (!GetClientRect(hwnd, &rect)) return false;
+        if (!hoverOnly) {
+            point = { (rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2 };
+            if (!ClientToScreen(hwnd, &point)) return false;
+        }
+        POINT client = point;
+        if (!ScreenToClient(hwnd, &client) || !PtInRect(&rect, client)) return false;
+        if (hoverOnly) {
+            bool exposed = false;
+            HWND above = GetTopWindow(nullptr);
+            for (int count = 0; above && count < 1024; ++count, above = GetWindow(above, GW_HWNDNEXT)) {
+                if (above == hwnd) { exposed = true; break; }
+                RECT bounds;
+                if (IsWindowVisible(above) && !IsIconic(above) &&
+                    !(GetWindowLongPtrW(above, GWL_EXSTYLE) & WS_EX_TRANSPARENT) &&
+                    GetWindowRect(above, &bounds) && PtInRect(&bounds, point)) return false;
+            }
+            if (!exposed) return false;
+        }
+        HWND receiver = hwnd;
+        for (int depth = 0; depth < 32; ++depth) {
+            POINT local = point;
+            if (!ScreenToClient(receiver, &local)) return false;
+            HWND child = ChildWindowFromPointEx(receiver, local, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED | CWP_SKIPTRANSPARENT);
+            if (!child || child == receiver) break;
+            receiver = child;
+        }
+        // PostMessage is bounded/nonblocking; failed delivery leaves the physical event alone.
+        return !!PostMessageW(receiver, message, MAKEWPARAM(keys, (WORD)delta), MAKELPARAM(point.x, point.y));
+    }
     bool SetAlpha(HWND hwnd, int alpha) {
         State* s = Track(hwnd);
         if (!s) return false;

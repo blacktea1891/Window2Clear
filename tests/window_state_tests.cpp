@@ -1,6 +1,20 @@
 #include "../Window2Clear/WindowState.h"
 #include <stdio.h>
 #define CHECK(expr) do { if (!(expr)) { printf("FAIL line %d: %s (error %lu)\n", __LINE__, #expr, GetLastError()); return 1; } } while (0)
+int wheelCount = 0;
+UINT wheelMessage = 0;
+WPARAM wheelParam = 0;
+LRESULT CALLBACK WheelReceiver(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL) {
+        ++wheelCount; wheelMessage = msg; wheelParam = wp;
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+void PumpMessages() {
+    MSG msg;
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+}
 
 struct TaskbarStub : ITaskbarList {
     int added = 0, removed = 0;
@@ -26,13 +40,32 @@ int main() {
     CHECK(windows.SetAlpha(hwnd, 160));
     CHECK(windows.ToggleClick(hwnd));
     CHECK(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TRANSPARENT);
+    HWND child = CreateWindowExW(0, L"STATIC", L"Reading surface", WS_CHILD | WS_VISIBLE,
+        0, 0, 360, 240, hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
+    CHECK(child);
+    SetWindowLongPtrW(child, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WheelReceiver));
+    PumpMessages();
+    HWND foreground = GetForegroundWindow();
+    CHECK(windows.ForwardWheel(WM_MOUSEWHEEL, -WHEEL_DELTA, POINT{0,0}, 0, false));
+    PumpMessages();
+    CHECK(wheelCount == 1 && (short)HIWORD(wheelParam) == -WHEEL_DELTA);
+    CHECK(GetForegroundWindow() == foreground);
+    CHECK(windows.ForwardWheel(WM_MOUSEHWHEEL, 60, POINT{0,0}, MK_SHIFT, false));
+    PumpMessages();
+    CHECK(wheelCount == 2 && wheelMessage == WM_MOUSEHWHEEL && LOWORD(wheelParam) == MK_SHIFT && (short)HIWORD(wheelParam) == 60);
+    CHECK(!windows.ForwardWheel(WM_LBUTTONDOWN, 120, POINT{0,0}, 0, false));
+    CHECK(!windows.ForwardWheel(WM_MOUSEWHEEL, 120, POINT{-30000,-30000}, 0));
+    CHECK(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TRANSPARENT);
+    DestroyWindow(child);
     CHECK(windows.SetAlpha(hwnd, 255));
     CHECK(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED);
     CHECK(windows.ToggleClick(nullptr)); // recovery independent of foreground
+    CHECK(!windows.ForwardWheel(WM_MOUSEWHEEL, 120, POINT{0,0}, 0, false));
     CHECK(!(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TRANSPARENT));
     CHECK(!(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED));
     CHECK(windows.ToggleHidden(hwnd));
     CHECK(!IsWindowVisible(hwnd));
+    CHECK(!windows.ForwardWheel(WM_MOUSEWHEEL, 120, POINT{0,0}, 0, false));
     CHECK(windows.ToggleHidden(nullptr));
     CHECK(IsWindowVisible(hwnd));
     ShowWindow(hwnd, SW_SHOWMAXIMIZED);

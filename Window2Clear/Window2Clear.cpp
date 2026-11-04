@@ -32,6 +32,8 @@ UINT g_hideModifiers = MOD_CONTROL | MOD_ALT, g_hideKey = 'H';
 #define ID_HOTKEY_CLICK 5
 #define ID_HOTKEY_HIDE 6
 #define ID_HOTKEY_RECOVER 7
+#define ID_HOTKEY_PAGE_UP 8
+#define ID_HOTKEY_PAGE_DOWN 9
 #define ID_TRAY_RESTORE 1003
 #define IDC_CLICK_BUTTON 2020
 #define IDC_CLICK_DISPLAY 2021
@@ -40,6 +42,30 @@ UINT g_hideModifiers = MOD_CONTROL | MOD_ALT, g_hideKey = 'H';
 #define IDC_HIDE_DISPLAY 2024
 #define IDC_HIDE_ENABLE 2025
 #define IDC_TASKBAR_ENABLE 2026
+#define IDC_WHEEL_ENABLE 2027
+#define IDC_PAGE_UP_BUTTON 2028
+#define IDC_PAGE_UP_DISPLAY 2029
+#define IDC_PAGE_DOWN_BUTTON 2030
+#define IDC_PAGE_DOWN_DISPLAY 2031
+BOOL g_forwardWheel = TRUE;
+UINT g_pageUpModifiers = MOD_CONTROL | MOD_ALT, g_pageUpKey = VK_UP;
+UINT g_pageDownModifiers = MOD_CONTROL | MOD_ALT, g_pageDownKey = VK_DOWN;
+HHOOK g_mouseHook = NULL;
+LRESULT CALLBACK ReaderMouseProc(int code, WPARAM message, LPARAM data) {
+    if (code == HC_ACTION && g_forwardWheel && (message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL)) {
+        const MSLLHOOKSTRUCT* mouse = reinterpret_cast<const MSLLHOOKSTRUCT*>(data);
+        if (!(mouse->flags & LLMHF_INJECTED)) {
+            WORD keys = 0;
+            if (GetAsyncKeyState(VK_CONTROL) & 0x8000) keys |= MK_CONTROL;
+            if (GetAsyncKeyState(VK_SHIFT) & 0x8000) keys |= MK_SHIFT;
+            if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) keys |= MK_LBUTTON;
+            if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) keys |= MK_RBUTTON;
+            if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) keys |= MK_MBUTTON;
+            if (g_windows.ForwardWheel((UINT)message, (short)HIWORD(mouse->mouseData), mouse->pt, keys)) return 1;
+        }
+    }
+    return CallNextHookEx(g_mouseHook, code, message, data);
+}
 extern HWND g_hMainWnd;
 void ReportFailure() {
     MessageBox(g_hMainWnd, L"操作失败：请检查目标窗口权限或系统支持。可从托盘恢复所有窗口。", L"Window2Clear", MB_OK | MB_ICONWARNING);
@@ -120,6 +146,7 @@ wchar_t* GetKeyName(UINT vkCode);                 // 获取按键名称
 // 主函数
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+    SetProcessDPIAware();
     // 初始化通用控件
     InitCommonControls();
 
@@ -174,6 +201,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // 注册全局热键
     RegisterHotKeys(g_hMainWnd);
 
+    g_mouseHook = SetWindowsHookEx(WH_MOUSE_LL, ReaderMouseProc, hInstance, 0);
+    if (!g_mouseHook) MessageBox(g_hMainWnd, L"滚轮转发启动失败。仍可使用全局翻页热键或关闭穿透操作阅读器。", L"提示", MB_OK | MB_ICONWARNING);
     // 显示启动提示
     wchar_t startupMsg[500];
     swprintf_s(startupMsg, 500, L"Window2Clear %s 已启动！\n\n默认热键：\n- Alt+←/→ 调整窗口透明度\n- Ctrl+数字键5 窗口居中（需开启）\n- Alt+↓ 窗口抖动（需开启）\n\n右键点击托盘图标进行设置", APP_VERSION);
@@ -187,6 +216,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
 
     // 清理资源
+    if (g_mouseHook) UnhookWindowsHookEx(g_mouseHook);
     UnregisterHotKeys(g_hMainWnd);
     RemoveTrayIcon();
     g_windows.Shutdown();
@@ -213,6 +243,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             break;
         case ID_HOTKEY_CENTER_WINDOW:
             CenterWindow(); // 窗口居中
+            break;
+        case ID_HOTKEY_PAGE_UP:
+        case ID_HOTKEY_PAGE_DOWN:
+            if (g_windows.ClickTarget() && !g_windows.ForwardWheel(WM_MOUSEWHEEL,
+                wParam == ID_HOTKEY_PAGE_UP ? WHEEL_DELTA : -WHEEL_DELTA, POINT{0, 0}, 0, false)) ReportFailure();
             break;
         case ID_HOTKEY_CLICK:
             if (g_recoveryAvailable && !g_windows.ToggleClick(TargetWindow())) ReportFailure();
@@ -274,6 +309,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     static HWND hTransparencyUpDisplay, hTransparencyDownDisplay, hCenterDisplay, hShakeDisplay;
     static HWND hTransparencyUpButton, hTransparencyDownButton, hCenterButton, hShakeButton;
     static HWND hTransparencyEnable, hCenterEnable, hShakeEnable;
+    static HWND hWheelEnable, hPageUpDisplay, hPageUpButton, hPageDownDisplay, hPageDownButton;
     static HWND hClickDisplay, hClickButton, hClickEnable, hHideDisplay, hHideButton, hHideEnable, hTaskbarEnable;
 
     switch (uMsg) {
@@ -417,6 +453,23 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             else { hHideDisplay = display; hHideButton = button; hHideEnable = check; }
             yPos += 35;
         }
+        for (int row = 0; row < 2; ++row) {
+            CreateWindow(L"STATIC", row == 0 ? L"穿透时上翻:" : L"穿透时下翻:", WS_VISIBLE | WS_CHILD,
+                20, yPos, 100, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
+            HWND display = CreateWindow(L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_READONLY,
+                120, yPos, 140, 20, hwnd, (HMENU)(INT_PTR)(row == 0 ? IDC_PAGE_UP_DISPLAY : IDC_PAGE_DOWN_DISPLAY), GetModuleHandle(NULL), NULL);
+            swprintf(keyText, 256, L"%s+%s", GetModifierName(row == 0 ? g_pageUpModifiers : g_pageDownModifiers), GetKeyName(row == 0 ? g_pageUpKey : g_pageDownKey));
+            SetWindowText(display, keyText);
+            HWND button = CreateWindow(L"BUTTON", L"设置", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+                270, yPos, 50, 20, hwnd, (HMENU)(INT_PTR)(row == 0 ? IDC_PAGE_UP_BUTTON : IDC_PAGE_DOWN_BUTTON), GetModuleHandle(NULL), NULL);
+            if (row == 0) { hPageUpDisplay = display; hPageUpButton = button; }
+            else { hPageDownDisplay = display; hPageDownButton = button; }
+            yPos += 30;
+        }
+        hWheelEnable = CreateWindow(L"BUTTON", L"穿透时保留滚轮翻页", WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+            20, yPos, 300, 22, hwnd, (HMENU)IDC_WHEEL_ENABLE, GetModuleHandle(NULL), NULL);
+        SendMessage(hWheelEnable, BM_SETCHECK, g_forwardWheel ? BST_CHECKED : BST_UNCHECKED, 0);
+        yPos += 28;
         hTaskbarEnable = CreateWindow(L"BUTTON", L"透明时隐藏任务栏按钮", WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
             20, yPos, 300, 22, hwnd, (HMENU)IDC_TASKBAR_ENABLE, GetModuleHandle(NULL), NULL);
         SendMessage(hTaskbarEnable, BM_SETCHECK, g_windows.hideTaskbar ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -470,6 +523,9 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
+        case IDC_WHEEL_ENABLE:
+            g_forwardWheel = SendMessage(hWheelEnable, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            break;
         case IDC_CLICK_ENABLE:
             g_enableClick = SendMessage(hClickEnable, BM_GETCHECK, 0, 0) == BST_CHECKED;
             break;
@@ -480,14 +536,17 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             g_windows.hideTaskbar = SendMessage(hTaskbarEnable, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (!g_windows.SyncTaskbar()) ReportFailure();
             break;
+        case IDC_PAGE_UP_BUTTON:
+        case IDC_PAGE_DOWN_BUTTON:
         case IDC_CLICK_BUTTON:
         case IDC_HIDE_BUTTON:
         {
             if (g_isListeningHotkey) SetWindowText(g_hCurrentButton, L"设置");
             g_isListeningHotkey = TRUE;
-            g_currentListeningType = LOWORD(wParam) == IDC_CLICK_BUTTON ? 5 : 6;
-            g_hCurrentButton = g_currentListeningType == 5 ? hClickButton : hHideButton;
-            g_hCurrentDisplay = g_currentListeningType == 5 ? hClickDisplay : hHideDisplay;
+            g_currentListeningType = LOWORD(wParam) == IDC_CLICK_BUTTON ? 5 :
+                LOWORD(wParam) == IDC_HIDE_BUTTON ? 6 : LOWORD(wParam) == IDC_PAGE_UP_BUTTON ? 7 : 8;
+            g_hCurrentButton = g_currentListeningType == 5 ? hClickButton : g_currentListeningType == 6 ? hHideButton : g_currentListeningType == 7 ? hPageUpButton : hPageDownButton;
+            g_hCurrentDisplay = g_currentListeningType == 5 ? hClickDisplay : g_currentListeningType == 6 ? hHideDisplay : g_currentListeningType == 7 ? hPageUpDisplay : hPageDownDisplay;
             g_listeningStartTime = GetTickCount();
             SetWindowText(g_hCurrentButton, L"录入中");
             SetWindowText(g_hCurrentDisplay, L"请按下组合键...");
@@ -686,7 +745,9 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                     ((modifiers == g_centerModifiers && wParam == g_centerKey) && g_currentListeningType != 3) ||
                     ((modifiers == g_shakeModifiers && wParam == g_shakeKey) && g_currentListeningType != 4) ||
                     ((modifiers == g_clickModifiers && wParam == g_clickKey) && g_currentListeningType != 5) ||
-                    ((modifiers == g_hideModifiers && wParam == g_hideKey) && g_currentListeningType != 6)) {
+                    ((modifiers == g_hideModifiers && wParam == g_hideKey) && g_currentListeningType != 6) ||
+                    ((modifiers == g_pageUpModifiers && wParam == g_pageUpKey) && g_currentListeningType != 7) ||
+                    ((modifiers == g_pageDownModifiers && wParam == g_pageDownKey) && g_currentListeningType != 8)) {
                     SetWindowText(g_hCurrentDisplay, L"热键冲突，请重试");
                     break;
                 }
@@ -704,6 +765,8 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                     g_centerModifiers = modifiers;
                     g_centerKey = (UINT)wParam;
                     break;
+                case 7: g_pageUpModifiers = modifiers; g_pageUpKey = (UINT)wParam; break;
+                case 8: g_pageDownModifiers = modifiers; g_pageDownKey = (UINT)wParam; break;
                 case 5: g_clickModifiers = modifiers; g_clickKey = (UINT)wParam; break;
                 case 6: g_hideModifiers = modifiers; g_hideKey = (UINT)wParam; break;
                 case 4: // 窗口抖动
@@ -888,6 +951,12 @@ void RegisterHotKeys(HWND hwnd)
     // 注销所有现有热键
     UnregisterHotKeys(hwnd);
 
+    if (g_recoveryAvailable && g_enableClick) {
+        if (!RegisterHotKey(hwnd, ID_HOTKEY_PAGE_UP, g_pageUpModifiers | MOD_NOREPEAT, g_pageUpKey))
+            MessageBox(hwnd, L"穿透上翻热键注册失败，请更换组合键。", L"警告", MB_OK | MB_ICONWARNING);
+        if (!RegisterHotKey(hwnd, ID_HOTKEY_PAGE_DOWN, g_pageDownModifiers | MOD_NOREPEAT, g_pageDownKey))
+            MessageBox(hwnd, L"穿透下翻热键注册失败，请更换组合键。", L"警告", MB_OK | MB_ICONWARNING);
+    }
     if (g_recoveryAvailable && g_enableClick && !RegisterHotKey(hwnd, ID_HOTKEY_CLICK, g_clickModifiers | MOD_NOREPEAT, g_clickKey))
         MessageBox(hwnd, L"鼠标穿透热键注册失败", L"警告", MB_OK | MB_ICONWARNING);
     if (g_recoveryAvailable && g_enableHide && !RegisterHotKey(hwnd, ID_HOTKEY_HIDE, g_hideModifiers | MOD_NOREPEAT, g_hideKey))
@@ -924,6 +993,8 @@ void UnregisterHotKeys(HWND hwnd)
     UnregisterHotKey(hwnd, ID_HOTKEY_SHAKE_WINDOW);
     UnregisterHotKey(hwnd, ID_HOTKEY_CLICK);
     UnregisterHotKey(hwnd, ID_HOTKEY_HIDE);
+    UnregisterHotKey(hwnd, ID_HOTKEY_PAGE_UP);
+    UnregisterHotKey(hwnd, ID_HOTKEY_PAGE_DOWN);
 }
 
 // 调整窗口透明度
@@ -1069,6 +1140,11 @@ void LoadConfig()
     g_enableClick = GetPrivateProfileInt(L"Switches", L"EnableClickThrough", 1, CONFIG_FILE);
     g_enableHide = GetPrivateProfileInt(L"Switches", L"EnableToggleHidden", 1, CONFIG_FILE);
     g_windows.hideTaskbar = GetPrivateProfileInt(L"Settings", L"HideTaskbarWhenTransparent", 0, CONFIG_FILE) != 0;
+    g_forwardWheel = GetPrivateProfileInt(L"Settings", L"ForwardWheelWhenClickThrough", 1, CONFIG_FILE) != 0;
+    g_pageUpModifiers = GetPrivateProfileInt(L"Hotkeys", L"PageUpModifiers", MOD_CONTROL | MOD_ALT, CONFIG_FILE);
+    g_pageUpKey = GetPrivateProfileInt(L"Hotkeys", L"PageUpKey", VK_UP, CONFIG_FILE);
+    g_pageDownModifiers = GetPrivateProfileInt(L"Hotkeys", L"PageDownModifiers", MOD_CONTROL | MOD_ALT, CONFIG_FILE);
+    g_pageDownKey = GetPrivateProfileInt(L"Hotkeys", L"PageDownKey", VK_DOWN, CONFIG_FILE);
     // 限制透明度步长范围
     if (g_transparencyStep < 1) g_transparencyStep = 1;
     if (g_transparencyStep > 50) g_transparencyStep = 50;
@@ -1088,6 +1164,13 @@ void SaveConfig()
     WritePrivateProfileString(L"Switches", L"EnableClickThrough", g_enableClick ? L"1" : L"0", CONFIG_FILE);
     WritePrivateProfileString(L"Switches", L"EnableToggleHidden", g_enableHide ? L"1" : L"0", CONFIG_FILE);
     WritePrivateProfileString(L"Settings", L"HideTaskbarWhenTransparent", g_windows.hideTaskbar ? L"1" : L"0", CONFIG_FILE);
+    const wchar_t* pageKeys[] = { L"PageUpModifiers", L"PageUpKey", L"PageDownModifiers", L"PageDownKey" };
+    UINT pageValues[] = { g_pageUpModifiers, g_pageUpKey, g_pageDownModifiers, g_pageDownKey };
+    for (int i = 0; i < 4; ++i) {
+        swprintf(value, 32, L"%u", pageValues[i]);
+        WritePrivateProfileString(L"Hotkeys", pageKeys[i], value, CONFIG_FILE);
+    }
+    WritePrivateProfileString(L"Settings", L"ForwardWheelWhenClickThrough", g_forwardWheel ? L"1" : L"0", CONFIG_FILE);
     // 保存透明度步长
     swprintf(value, 32, L"%d", g_transparencyStep);
     WritePrivateProfileString(L"Settings", L"TransparencyStep", value, CONFIG_FILE);
