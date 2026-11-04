@@ -14,6 +14,7 @@ class WindowStateManager {
         DWORD flags = LWA_ALPHA;
         int currentAlpha = 255;
         bool click = false, hidden = false, tabRemoved = false, layeredChanged = false;
+        bool layerKnown = true, topmostChanged = false, originalTopmost = false;
         WINDOWPLACEMENT placement = { sizeof(WINDOWPLACEMENT) };
     };
     std::map<HWND, State> states;
@@ -23,17 +24,20 @@ class WindowStateManager {
     bool Valid(HWND hwnd, State& s) {
         return IsWindow(hwnd) && GetPropW(hwnd, Marker()) == reinterpret_cast<HANDLE>(&s);
     }
-    State* Track(HWND hwnd) {
+    State* Track(HWND hwnd, bool needLayerSnapshot = true) {
         auto it = states.find(hwnd);
         if (it != states.end()) {
-            if (Valid(hwnd, it->second)) return &it->second;
+            if (Valid(hwnd, it->second)) return needLayerSnapshot && !it->second.layerKnown ? nullptr : &it->second;
             states.erase(it);
         }
         if (!IsWindow(hwnd)) return nullptr;
         State s;
         s.style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         if ((s.style & WS_EX_LAYERED) &&
-            !GetLayeredWindowAttributes(hwnd, &s.color, &s.alpha, &s.flags)) return nullptr;
+            !GetLayeredWindowAttributes(hwnd, &s.color, &s.alpha, &s.flags)) {
+            if (needLayerSnapshot) return nullptr;
+            s.layerKnown = false;
+        }
         s.currentAlpha = (s.flags & LWA_ALPHA) ? s.alpha : 255;
         auto& saved = states.emplace(hwnd, s).first->second;
         if (!SetPropW(hwnd, Marker(), reinterpret_cast<HANDLE>(&saved))) {
@@ -81,6 +85,16 @@ public:
     WindowStateManager(const WindowStateManager&) = delete;
     WindowStateManager& operator=(const WindowStateManager&) = delete;
     bool hideTaskbar = false;
+    bool ToggleTopmost(HWND hwnd) {
+        State* s = Track(hwnd, false);
+        if (!s) return false;
+        bool current = (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+        if (!SetWindowPos(hwnd, current ? HWND_NOTOPMOST : HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER)) return false;
+        if (!s->topmostChanged) s->originalTopmost = current;
+        s->topmostChanged = true;
+        return true;
+    }
     HWND ClickTarget() {
         auto it = states.find(clickTarget);
         return it != states.end() && Valid(it->first, it->second) && it->second.click ? it->first : nullptr;
@@ -189,6 +203,11 @@ public:
             }
             if (s.hidden) {
                 if (SetWindowPlacement(hwnd, &s.placement)) s.hidden = false;
+                else restored = false;
+            }
+            if (s.topmostChanged) {
+                if (SetWindowPos(hwnd, s.originalTopmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER)) s.topmostChanged = false;
                 else restored = false;
             }
             restored = Tab(hwnd, s, false) && restored;

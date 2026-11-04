@@ -91,3 +91,12 @@ https://github.com/iwill123/Window2Clear/releases/download/v0.2.0/Window2Clear_v
 新增配置：Settings/ForwardWheelWhenClickThrough=1；Hotkeys/PageUpModifiers=3、PageUpKey=38、PageDownModifiers=3、PageDownKey=40。
 
 实现使用低级鼠标监听和异步 WM_MOUSEWHEEL/WM_MOUSEHWHEEL 消息。仅在转发成功入队时消费原滚轮事件，避免下层窗口同时滚动；不拦截点击或普通方向键，不向阅读器注入代码，不切换前台窗口。部分自绘、WebView 或采用 Raw Input 的软件可能忽略后台消息；Actions 可验证普通 Win32 子窗口收件、方向、修饰键和焦点保持，不能替代 Readest 实际版本的桌面验收。若目标忽略已入队消息，可取消滚轮转发选项并暂时关闭穿透操作。系统权限限制仍适用。
+
+## 窗口置顶
+
+- 默认 `Ctrl+Alt+P`：切换活动窗口的置顶/取消置顶，按一次即可。可连续给多个窗口置顶。
+- 正在穿透某个窗口时，快捷键优先控制保存的穿透窗口，因此点击下层应用后仍能取消阅读器置顶。要控制另一个窗口，先关闭当前穿透，再激活要操作的窗口。
+- 设置中新增“窗口置顶”开关和热键录入，配置自动保存为 Switches/EnableTopmost=1、Hotkeys/TopmostModifiers=3、TopmostKey=80，旧配置使用默认值。
+- 置顶操作不移动、不缩放、不激活目标。可与透明、穿透、滚轮转发和隐藏/展开组合使用。推荐先给 Readest 置顶，再调透明并开启穿透。
+- 托盘“恢复所有窗口”、固定 `Ctrl+Alt+F12` 和正常退出会恢复首次切换置顶前的状态；原本已置顶的窗口会恢复置顶。不会将本次选中的 HWND 写入配置，重启不会误操作旧窗口。
+- 使用 Windows 原生 SetWindowPos 管理置顶顺序；多个置顶窗口仍按系统顺序相互遮挡，目标自己改变置顶状态也可能覆盖本工具设置。系统可能连带调整目标的属主/从属窗口，这是 Windows 的原生行为；不能盖过安全桌面等系统界面。权限和强制结束进程的限制与其他窗口操作相同。

@@ -34,6 +34,12 @@ UINT g_hideModifiers = MOD_CONTROL | MOD_ALT, g_hideKey = 'H';
 #define ID_HOTKEY_RECOVER 7
 #define ID_HOTKEY_PAGE_UP 8
 #define ID_HOTKEY_PAGE_DOWN 9
+#define ID_HOTKEY_TOPMOST 10
+#define IDC_TOPMOST_BUTTON 2032
+#define IDC_TOPMOST_DISPLAY 2033
+#define IDC_TOPMOST_ENABLE 2034
+BOOL g_enableTopmost = TRUE;
+UINT g_topmostModifiers = MOD_CONTROL | MOD_ALT, g_topmostKey = 'P';
 #define ID_TRAY_RESTORE 1003
 #define IDC_CLICK_BUTTON 2020
 #define IDC_CLICK_DISPLAY 2021
@@ -249,6 +255,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             if (g_windows.ClickTarget() && !g_windows.ForwardWheel(WM_MOUSEWHEEL,
                 wParam == ID_HOTKEY_PAGE_UP ? WHEEL_DELTA : -WHEEL_DELTA, POINT{0, 0}, 0, false)) ReportFailure();
             break;
+        case ID_HOTKEY_TOPMOST:
+        {
+            HWND target = g_windows.ClickTarget();
+            if (!target) target = TargetWindow();
+            if (target && !g_windows.ToggleTopmost(target)) ReportFailure();
+            break;
+        }
         case ID_HOTKEY_CLICK:
             if (g_recoveryAvailable && !g_windows.ToggleClick(TargetWindow())) ReportFailure();
             break;
@@ -309,6 +322,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     static HWND hTransparencyUpDisplay, hTransparencyDownDisplay, hCenterDisplay, hShakeDisplay;
     static HWND hTransparencyUpButton, hTransparencyDownButton, hCenterButton, hShakeButton;
     static HWND hTransparencyEnable, hCenterEnable, hShakeEnable;
+    static HWND hTopmostButton, hTopmostDisplay, hTopmostEnable;
     static HWND hWheelEnable, hPageUpDisplay, hPageUpButton, hPageDownDisplay, hPageDownButton;
     static HWND hClickDisplay, hClickButton, hClickEnable, hHideDisplay, hHideButton, hHideEnable, hTaskbarEnable;
 
@@ -453,6 +467,18 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             else { hHideDisplay = display; hHideButton = button; hHideEnable = check; }
             yPos += 35;
         }
+        CreateWindow(L"STATIC", L"窗口置顶:", WS_VISIBLE | WS_CHILD,
+            20, yPos, 80, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
+        hTopmostEnable = CreateWindow(L"BUTTON", L"启用", WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+            100, yPos, 60, 20, hwnd, (HMENU)IDC_TOPMOST_ENABLE, GetModuleHandle(NULL), NULL);
+        SendMessage(hTopmostEnable, BM_SETCHECK, g_enableTopmost ? BST_CHECKED : BST_UNCHECKED, 0);
+        hTopmostDisplay = CreateWindow(L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_READONLY,
+            165, yPos, 140, 20, hwnd, (HMENU)IDC_TOPMOST_DISPLAY, GetModuleHandle(NULL), NULL);
+        swprintf(keyText, 256, L"%s+%s", GetModifierName(g_topmostModifiers), GetKeyName(g_topmostKey));
+        SetWindowText(hTopmostDisplay, keyText);
+        hTopmostButton = CreateWindow(L"BUTTON", L"设置", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+            310, yPos, 50, 20, hwnd, (HMENU)IDC_TOPMOST_BUTTON, GetModuleHandle(NULL), NULL);
+        yPos += 30;
         for (int row = 0; row < 2; ++row) {
             CreateWindow(L"STATIC", row == 0 ? L"穿透时上翻:" : L"穿透时下翻:", WS_VISIBLE | WS_CHILD,
                 20, yPos, 100, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
@@ -523,6 +549,9 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
+        case IDC_TOPMOST_ENABLE:
+            g_enableTopmost = SendMessage(hTopmostEnable, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            break;
         case IDC_WHEEL_ENABLE:
             g_forwardWheel = SendMessage(hWheelEnable, BM_GETCHECK, 0, 0) == BST_CHECKED;
             break;
@@ -536,6 +565,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             g_windows.hideTaskbar = SendMessage(hTaskbarEnable, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (!g_windows.SyncTaskbar()) ReportFailure();
             break;
+        case IDC_TOPMOST_BUTTON:
         case IDC_PAGE_UP_BUTTON:
         case IDC_PAGE_DOWN_BUTTON:
         case IDC_CLICK_BUTTON:
@@ -543,10 +573,10 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         {
             if (g_isListeningHotkey) SetWindowText(g_hCurrentButton, L"设置");
             g_isListeningHotkey = TRUE;
-            g_currentListeningType = LOWORD(wParam) == IDC_CLICK_BUTTON ? 5 :
+            g_currentListeningType = LOWORD(wParam) == IDC_TOPMOST_BUTTON ? 9 : LOWORD(wParam) == IDC_CLICK_BUTTON ? 5 :
                 LOWORD(wParam) == IDC_HIDE_BUTTON ? 6 : LOWORD(wParam) == IDC_PAGE_UP_BUTTON ? 7 : 8;
-            g_hCurrentButton = g_currentListeningType == 5 ? hClickButton : g_currentListeningType == 6 ? hHideButton : g_currentListeningType == 7 ? hPageUpButton : hPageDownButton;
-            g_hCurrentDisplay = g_currentListeningType == 5 ? hClickDisplay : g_currentListeningType == 6 ? hHideDisplay : g_currentListeningType == 7 ? hPageUpDisplay : hPageDownDisplay;
+            g_hCurrentButton = g_currentListeningType == 9 ? hTopmostButton : g_currentListeningType == 5 ? hClickButton : g_currentListeningType == 6 ? hHideButton : g_currentListeningType == 7 ? hPageUpButton : hPageDownButton;
+            g_hCurrentDisplay = g_currentListeningType == 9 ? hTopmostDisplay : g_currentListeningType == 5 ? hClickDisplay : g_currentListeningType == 6 ? hHideDisplay : g_currentListeningType == 7 ? hPageUpDisplay : hPageDownDisplay;
             g_listeningStartTime = GetTickCount();
             SetWindowText(g_hCurrentButton, L"录入中");
             SetWindowText(g_hCurrentDisplay, L"请按下组合键...");
@@ -747,7 +777,8 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                     ((modifiers == g_clickModifiers && wParam == g_clickKey) && g_currentListeningType != 5) ||
                     ((modifiers == g_hideModifiers && wParam == g_hideKey) && g_currentListeningType != 6) ||
                     ((modifiers == g_pageUpModifiers && wParam == g_pageUpKey) && g_currentListeningType != 7) ||
-                    ((modifiers == g_pageDownModifiers && wParam == g_pageDownKey) && g_currentListeningType != 8)) {
+                    ((modifiers == g_pageDownModifiers && wParam == g_pageDownKey) && g_currentListeningType != 8) ||
+                    ((modifiers == g_topmostModifiers && wParam == g_topmostKey) && g_currentListeningType != 9)) {
                     SetWindowText(g_hCurrentDisplay, L"热键冲突，请重试");
                     break;
                 }
@@ -765,6 +796,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                     g_centerModifiers = modifiers;
                     g_centerKey = (UINT)wParam;
                     break;
+                case 9: g_topmostModifiers = modifiers; g_topmostKey = (UINT)wParam; break;
                 case 7: g_pageUpModifiers = modifiers; g_pageUpKey = (UINT)wParam; break;
                 case 8: g_pageDownModifiers = modifiers; g_pageDownKey = (UINT)wParam; break;
                 case 5: g_clickModifiers = modifiers; g_clickKey = (UINT)wParam; break;
@@ -921,7 +953,7 @@ void ShowSettingsWindow()
 
     // 计算窗口居中位置
     int windowWidth = 380;
-    int windowHeight = 700;
+    int windowHeight = 720;
     int screenWidth = GetSystemMetrics(SM_CXSCREEN);
     int screenHeight = GetSystemMetrics(SM_CYSCREEN);
     int x = (screenWidth - windowWidth) / 2;
@@ -951,6 +983,8 @@ void RegisterHotKeys(HWND hwnd)
     // 注销所有现有热键
     UnregisterHotKeys(hwnd);
 
+    if (g_enableTopmost && !RegisterHotKey(hwnd, ID_HOTKEY_TOPMOST, g_topmostModifiers | MOD_NOREPEAT, g_topmostKey))
+        MessageBox(hwnd, L"窗口置顶热键注册失败，请更换组合键。", L"警告", MB_OK | MB_ICONWARNING);
     if (g_recoveryAvailable && g_enableClick) {
         if (!RegisterHotKey(hwnd, ID_HOTKEY_PAGE_UP, g_pageUpModifiers | MOD_NOREPEAT, g_pageUpKey))
             MessageBox(hwnd, L"穿透上翻热键注册失败，请更换组合键。", L"警告", MB_OK | MB_ICONWARNING);
@@ -995,6 +1029,7 @@ void UnregisterHotKeys(HWND hwnd)
     UnregisterHotKey(hwnd, ID_HOTKEY_HIDE);
     UnregisterHotKey(hwnd, ID_HOTKEY_PAGE_UP);
     UnregisterHotKey(hwnd, ID_HOTKEY_PAGE_DOWN);
+    UnregisterHotKey(hwnd, ID_HOTKEY_TOPMOST);
 }
 
 // 调整窗口透明度
@@ -1145,6 +1180,9 @@ void LoadConfig()
     g_pageUpKey = GetPrivateProfileInt(L"Hotkeys", L"PageUpKey", VK_UP, CONFIG_FILE);
     g_pageDownModifiers = GetPrivateProfileInt(L"Hotkeys", L"PageDownModifiers", MOD_CONTROL | MOD_ALT, CONFIG_FILE);
     g_pageDownKey = GetPrivateProfileInt(L"Hotkeys", L"PageDownKey", VK_DOWN, CONFIG_FILE);
+    g_enableTopmost = GetPrivateProfileInt(L"Switches", L"EnableTopmost", 1, CONFIG_FILE);
+    g_topmostModifiers = GetPrivateProfileInt(L"Hotkeys", L"TopmostModifiers", MOD_CONTROL | MOD_ALT, CONFIG_FILE);
+    g_topmostKey = GetPrivateProfileInt(L"Hotkeys", L"TopmostKey", 'P', CONFIG_FILE);
     // 限制透明度步长范围
     if (g_transparencyStep < 1) g_transparencyStep = 1;
     if (g_transparencyStep > 50) g_transparencyStep = 50;
@@ -1171,6 +1209,11 @@ void SaveConfig()
         WritePrivateProfileString(L"Hotkeys", pageKeys[i], value, CONFIG_FILE);
     }
     WritePrivateProfileString(L"Settings", L"ForwardWheelWhenClickThrough", g_forwardWheel ? L"1" : L"0", CONFIG_FILE);
+    WritePrivateProfileString(L"Switches", L"EnableTopmost", g_enableTopmost ? L"1" : L"0", CONFIG_FILE);
+    swprintf(value, 32, L"%u", g_topmostModifiers);
+    WritePrivateProfileString(L"Hotkeys", L"TopmostModifiers", value, CONFIG_FILE);
+    swprintf(value, 32, L"%u", g_topmostKey);
+    WritePrivateProfileString(L"Hotkeys", L"TopmostKey", value, CONFIG_FILE);
     // 保存透明度步长
     swprintf(value, 32, L"%d", g_transparencyStep);
     WritePrivateProfileString(L"Settings", L"TransparencyStep", value, CONFIG_FILE);

@@ -96,6 +96,46 @@ int main() {
     CHECK(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) == original);
     CHECK(windows.RestoreAll()); // idempotent
 
+    ShowWindow(hwnd, SW_RESTORE);
+    RECT beforePin, afterPin;
+    CHECK(GetWindowRect(hwnd, &beforePin));
+    foreground = GetForegroundWindow();
+    CHECK(windows.ToggleTopmost(hwnd));
+    CHECK(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST);
+    CHECK(GetWindowRect(hwnd, &afterPin) && EqualRect(&beforePin, &afterPin));
+    CHECK(GetForegroundWindow() == foreground);
+    CHECK(windows.ToggleTopmost(hwnd));
+    CHECK(!(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST));
+    CHECK(windows.ToggleTopmost(hwnd));
+    CHECK(windows.SetAlpha(hwnd, 160));
+    CHECK(windows.ToggleClick(hwnd));
+    CHECK(windows.ToggleHidden(hwnd));
+    CHECK(windows.RestoreAll());
+    CHECK(IsWindowVisible(hwnd));
+    CHECK(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) == original);
+
+    CHECK(SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE));
+    CHECK(windows.ToggleTopmost(hwnd));
+    CHECK(!(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST));
+    CHECK(windows.RestoreAll());
+    CHECK(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST);
+    CHECK(SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE));
+
+    HWND second = CreateWindowExW(WS_EX_LAYERED, wc.lpszClassName, L"Uninitialized layered target",
+        WS_OVERLAPPEDWINDOW, 20, 20, 200, 200, nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
+    CHECK(second);
+    CHECK(windows.ToggleTopmost(hwnd));
+    CHECK(windows.ToggleTopmost(second)); // pinning does not require readable layer attributes
+    CHECK(GetWindowLongPtrW(second, GWL_EXSTYLE) & WS_EX_TOPMOST);
+    CHECK(!IsWindowVisible(second)); // pinning does not show hidden windows
+    CHECK(!windows.SetAlpha(second, 100)); // unsupported layers remain protected
+    CHECK(windows.RestoreAll());
+    CHECK(!(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST));
+    CHECK(!(GetWindowLongPtrW(second, GWL_EXSTYLE) & WS_EX_TOPMOST));
+    CHECK(GetWindowLongPtrW(second, GWL_EXSTYLE) & WS_EX_LAYERED);
+    DestroyWindow(second);
+    CHECK(!windows.ToggleTopmost(nullptr));
+
     TaskbarStub taskbar;
     WindowStateManager tabs(&taskbar);
     tabs.hideTaskbar = true;
@@ -135,6 +175,6 @@ int main() {
     CHECK(!windows.ToggleHidden(nullptr));
     windows.Shutdown();
     CoUninitialize();
-    puts("PASS: window state transitions, original layers, identity, recovery");
+    puts("PASS: window state transitions, wheel delivery, topmost, original layers, identity, recovery");
     return 0;
 }
