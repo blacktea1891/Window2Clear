@@ -46,8 +46,10 @@ int main() {
     CHECK(windows.SetAlpha(hwnd, 160));
     CHECK(windows.ToggleClick(hwnd));
     CHECK(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TRANSPARENT);
+    RECT content;
+    CHECK(GetClientRect(hwnd, &content));
     HWND child = CreateWindowExW(0, wc.lpszClassName, L"Reading surface", WS_CHILD | WS_VISIBLE,
-        0, 0, 360, 240, hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
+        0, 0, content.right, content.bottom, hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
     CHECK(child);
     PumpMessages();
     HWND foreground = GetForegroundWindow();

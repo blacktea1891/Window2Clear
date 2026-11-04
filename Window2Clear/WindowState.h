@@ -113,11 +113,17 @@ public:
         }
         HWND receiver = hwnd;
         for (int depth = 0; depth < 32; ++depth) {
-            POINT local = point;
-            if (!ScreenToClient(receiver, &local)) return false;
-            HWND child = ChildWindowFromPointEx(receiver, local, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED | CWP_SKIPTRANSPARENT);
-            if (!child || child == receiver) break;
-            receiver = child;
+            // Walk geometry directly: normal hit testing intentionally skips our
+            // transparent parent. WebView content can itself have transparent styles.
+            HWND found = nullptr;
+            HWND child = GetWindow(receiver, GW_CHILD);
+            for (int count = 0; child && count < 1024; ++count, child = GetWindow(child, GW_HWNDNEXT)) {
+                RECT bounds;
+                if (IsWindowVisible(child) && IsWindowEnabled(child) &&
+                    GetWindowRect(child, &bounds) && PtInRect(&bounds, point)) { found = child; break; }
+            }
+            if (!found) break;
+            receiver = found;
         }
         // PostMessage is bounded/nonblocking; failed delivery leaves the physical event alone.
         return !!PostMessageW(receiver, message, MAKEWPARAM(keys, (WORD)delta), MAKELPARAM(point.x, point.y));
