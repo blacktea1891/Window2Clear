@@ -63,7 +63,7 @@ class WindowStateManager {
         return true;
     }
     bool Tab(HWND hwnd, State& s, bool remove) {
-        if (remove == s.tabRemoved) return true;
+        if (!remove && !s.tabRemoved) return true;
         // Never add a taskbar button for an original tool/owned window.
         if (remove && ((s.style & WS_EX_TOOLWINDOW) ||
             (GetWindow(hwnd, GW_OWNER) && !(s.style & WS_EX_APPWINDOW)))) return true;
@@ -77,6 +77,9 @@ class WindowStateManager {
         return SUCCEEDED(hr);
     }
 public:
+    explicit WindowStateManager(ITaskbarList* api = nullptr) : taskbar(api) { if (taskbar) taskbar->AddRef(); }
+    WindowStateManager(const WindowStateManager&) = delete;
+    WindowStateManager& operator=(const WindowStateManager&) = delete;
     bool hideTaskbar = false;
     bool SetAlpha(HWND hwnd, int alpha) {
         State* s = Track(hwnd);
@@ -107,7 +110,7 @@ public:
             if (!SetWindowPlacement(it->first, &it->second.placement)) return false;
             it->second.hidden = false;
             hiddenTarget = nullptr;
-            return true;
+            return Tab(it->first, it->second, hideTaskbar && it->second.currentAlpha < 255);
         }
         State* s = Track(hwnd);
         if (!s || !IsWindowVisible(hwnd) || !GetWindowPlacement(hwnd, &s->placement)) return false;

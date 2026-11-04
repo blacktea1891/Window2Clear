@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: microsoft/setup-msbuild@v2
       - name: Build application
-        run: msbuild Window2Clear.sln /m /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }} /p:OutDir="${{ github.workspace }}\build\${{ matrix.platform }}\${{ matrix.configuration }}\\" /p:AdditionalOptions=/utf-8
+        run: msbuild Window2Clear/Window2Clear.vcxproj /m /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }} /p:OutDir="${{ github.workspace }}\build\${{ matrix.platform }}\${{ matrix.configuration }}\\"
       - name: Compile and run native regression tests
         shell: cmd
         run: |
