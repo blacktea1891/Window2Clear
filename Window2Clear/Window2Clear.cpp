@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "resource.h"
+#include "WindowState.h"
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -18,10 +19,37 @@
 #define ID_HOTKEY_TRANSPARENCY_DOWN 2
 #define ID_HOTKEY_CENTER_WINDOW 3
 #define ID_HOTKEY_SHAKE_WINDOW 4
-#define CONFIG_FILE L".\\config.ini"
+#define CONFIG_FILE g_configPath
 #define MAX_PATH_LEN 260
 #define APP_VERSION L"v0.2.0"
 
+wchar_t g_configPath[MAX_PATH] = L".\\config.ini";
+WindowStateManager g_windows;
+BOOL g_recoveryAvailable = FALSE;
+BOOL g_enableClick = TRUE, g_enableHide = TRUE;
+UINT g_clickModifiers = MOD_CONTROL | MOD_ALT, g_clickKey = 'T';
+UINT g_hideModifiers = MOD_CONTROL | MOD_ALT, g_hideKey = 'H';
+#define ID_HOTKEY_CLICK 5
+#define ID_HOTKEY_HIDE 6
+#define ID_HOTKEY_RECOVER 7
+#define ID_TRAY_RESTORE 1003
+#define IDC_CLICK_BUTTON 2020
+#define IDC_CLICK_DISPLAY 2021
+#define IDC_CLICK_ENABLE 2022
+#define IDC_HIDE_BUTTON 2023
+#define IDC_HIDE_DISPLAY 2024
+#define IDC_HIDE_ENABLE 2025
+#define IDC_TASKBAR_ENABLE 2026
+extern HWND g_hMainWnd;
+void ReportFailure() {
+    MessageBox(g_hMainWnd, L"操作失败：请检查目标窗口权限或系统支持。可从托盘恢复所有窗口。", L"Window2Clear", MB_OK | MB_ICONWARNING);
+}
+HWND TargetWindow() {
+    HWND hwnd = GetForegroundWindow();
+    DWORD pid = 0; GetWindowThreadProcessId(hwnd, &pid);
+    if (!hwnd || pid == GetCurrentProcessId() || hwnd == GetDesktopWindow() || hwnd == GetShellWindow()) return NULL;
+    return GetAncestor(hwnd, GA_ROOT);
+}
 // 控件ID
 #define IDC_TRANSPARENCY_UP_BUTTON 2001
 #define IDC_TRANSPARENCY_DOWN_BUTTON 2002
@@ -116,6 +144,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return 1;
     }
 
+    GetModuleFileName(NULL, g_configPath, MAX_PATH);
+    wchar_t* slash = wcsrchr(g_configPath, L'\\');
+    if (slash) wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - g_configPath), L"config.ini");
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     // 加载配置
     LoadConfig();
 
@@ -137,6 +169,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // 创建系统托盘图标
     CreateTrayIcon(g_hMainWnd);
 
+    g_recoveryAvailable = RegisterHotKey(g_hMainWnd, ID_HOTKEY_RECOVER, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_F12);
+    if (!g_recoveryAvailable) MessageBox(NULL, L"Ctrl+Alt+F12 恢复热键被占用，穿透和隐藏功能已暂停。", L"警告", MB_OK | MB_ICONWARNING);
     // 注册全局热键
     RegisterHotKeys(g_hMainWnd);
 
@@ -155,6 +189,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // 清理资源
     UnregisterHotKeys(g_hMainWnd);
     RemoveTrayIcon();
+    g_windows.Shutdown();
+    UnregisterHotKey(g_hMainWnd, ID_HOTKEY_RECOVER);
+    CoUninitialize();
 
     return (int)msg.wParam;
 }
@@ -177,6 +214,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         case ID_HOTKEY_CENTER_WINDOW:
             CenterWindow(); // 窗口居中
             break;
+        case ID_HOTKEY_CLICK:
+            if (g_recoveryAvailable && !g_windows.ToggleClick(TargetWindow())) ReportFailure();
+            break;
+        case ID_HOTKEY_HIDE:
+            if (g_recoveryAvailable && !g_windows.ToggleHidden(TargetWindow())) ReportFailure();
+            break;
+        case ID_HOTKEY_RECOVER:
+            if (!g_windows.RestoreAll()) ReportFailure();
+            break;
         case ID_HOTKEY_SHAKE_WINDOW:
             ShakeWindow(); // 窗口抖动
             break;
@@ -194,13 +240,24 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         case ID_TRAY_SETTINGS:
             ShowSettingsWindow();
             break;
+        case ID_TRAY_RESTORE:
+            if (!g_windows.RestoreAll()) ReportFailure();
+            break;
         case ID_TRAY_EXIT:
+            if (!g_windows.RestoreAll()) { ReportFailure(); break; }
             PostQuitMessage(0);
             break;
         }
         break;
 
+    case WM_QUERYENDSESSION:
+        g_windows.RestoreAll();
+        return TRUE;
+    case WM_ENDSESSION:
+        if (wParam) g_windows.RestoreAll();
+        break;
     case WM_DESTROY:
+        g_windows.RestoreAll();
         PostQuitMessage(0);
         break;
 
@@ -217,6 +274,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     static HWND hTransparencyUpDisplay, hTransparencyDownDisplay, hCenterDisplay, hShakeDisplay;
     static HWND hTransparencyUpButton, hTransparencyDownButton, hCenterButton, hShakeButton;
     static HWND hTransparencyEnable, hCenterEnable, hShakeEnable;
+    static HWND hClickDisplay, hClickButton, hClickEnable, hHideDisplay, hHideButton, hHideEnable, hTaskbarEnable;
 
     switch (uMsg) {
     case WM_CREATE:
@@ -341,6 +399,32 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
         yPos += 40;
 
+
+        for (int row = 0; row < 2; ++row) {
+            CreateWindow(L"STATIC", row == 0 ? L"鼠标穿透:" : L"隐藏/展开:", WS_VISIBLE | WS_CHILD,
+                20, yPos, 100, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
+            HWND check = CreateWindow(L"BUTTON", L"启用", WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+                150, yPos, 60, 20, hwnd, (HMENU)(INT_PTR)(row == 0 ? IDC_CLICK_ENABLE : IDC_HIDE_ENABLE), GetModuleHandle(NULL), NULL);
+            SendMessage(check, BM_SETCHECK, (row == 0 ? g_enableClick : g_enableHide) ? BST_CHECKED : BST_UNCHECKED, 0);
+            yPos += 25;
+            HWND display = CreateWindow(L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_READONLY,
+                30, yPos, 180, 20, hwnd, (HMENU)(INT_PTR)(row == 0 ? IDC_CLICK_DISPLAY : IDC_HIDE_DISPLAY), GetModuleHandle(NULL), NULL);
+            swprintf(keyText, 256, L"%s+%s", GetModifierName(row == 0 ? g_clickModifiers : g_hideModifiers), GetKeyName(row == 0 ? g_clickKey : g_hideKey));
+            SetWindowText(display, keyText);
+            HWND button = CreateWindow(L"BUTTON", L"设置", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+                220, yPos, 50, 20, hwnd, (HMENU)(INT_PTR)(row == 0 ? IDC_CLICK_BUTTON : IDC_HIDE_BUTTON), GetModuleHandle(NULL), NULL);
+            if (row == 0) { hClickDisplay = display; hClickButton = button; hClickEnable = check; }
+            else { hHideDisplay = display; hHideButton = button; hHideEnable = check; }
+            yPos += 35;
+        }
+        hTaskbarEnable = CreateWindow(L"BUTTON", L"透明时隐藏任务栏按钮", WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+            20, yPos, 300, 22, hwnd, (HMENU)IDC_TASKBAR_ENABLE, GetModuleHandle(NULL), NULL);
+        SendMessage(hTaskbarEnable, BM_SETCHECK, g_windows.hideTaskbar ? BST_CHECKED : BST_UNCHECKED, 0);
+        yPos += 28;
+        CreateWindow(L"STATIC", L"Ctrl+Alt+F12：恢复所有窗口（始终可用）", WS_VISIBLE | WS_CHILD,
+            20, yPos, 340, 22, hwnd, NULL, GetModuleHandle(NULL), NULL);
+        yPos += 32;
+
         // 透明度步长设置
         hTransparencyLabel = CreateWindow(L"STATIC", L"透明度步长: 10%",
             WS_VISIBLE | WS_CHILD,
@@ -386,6 +470,32 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
+        case IDC_CLICK_ENABLE:
+            g_enableClick = SendMessage(hClickEnable, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            break;
+        case IDC_HIDE_ENABLE:
+            g_enableHide = SendMessage(hHideEnable, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            break;
+        case IDC_TASKBAR_ENABLE:
+            g_windows.hideTaskbar = SendMessage(hTaskbarEnable, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (!g_windows.SyncTaskbar()) ReportFailure();
+            break;
+        case IDC_CLICK_BUTTON:
+        case IDC_HIDE_BUTTON:
+        {
+            if (g_isListeningHotkey) SetWindowText(g_hCurrentButton, L"设置");
+            g_isListeningHotkey = TRUE;
+            g_currentListeningType = LOWORD(wParam) == IDC_CLICK_BUTTON ? 5 : 6;
+            g_hCurrentButton = g_currentListeningType == 5 ? hClickButton : hHideButton;
+            g_hCurrentDisplay = g_currentListeningType == 5 ? hClickDisplay : hHideDisplay;
+            g_listeningStartTime = GetTickCount();
+            SetWindowText(g_hCurrentButton, L"录入中");
+            SetWindowText(g_hCurrentDisplay, L"请按下组合键...");
+            SetFocus(hwnd);
+            // Keep the fixed emergency recovery registered during capture.
+            UnregisterHotKeys(g_hMainWnd);
+            break;
+        }
         case IDC_TRANSPARENCY_UP_BUTTON:
         {
             if (g_isListeningHotkey && g_currentListeningType == 1) {
@@ -517,6 +627,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         case IDCANCEL:
             // 取消设置时，重新注册所有热键
             RegisterHotKeys(g_hMainWnd);
+            g_isListeningHotkey = FALSE;
             DestroyWindow(hwnd);
             g_hSettingsWnd = NULL;
             break;
@@ -569,6 +680,16 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 wParam == VK_SPACE || wParam == VK_TAB ||
                 wParam == VK_RETURN || wParam == VK_ESCAPE) {
 
+                if ((modifiers == (MOD_CONTROL | MOD_ALT) && wParam == VK_F12) ||
+                    ((modifiers == g_transparencyUpModifiers && wParam == g_transparencyUpKey) && g_currentListeningType != 1) ||
+                    ((modifiers == g_transparencyDownModifiers && wParam == g_transparencyDownKey) && g_currentListeningType != 2) ||
+                    ((modifiers == g_centerModifiers && wParam == g_centerKey) && g_currentListeningType != 3) ||
+                    ((modifiers == g_shakeModifiers && wParam == g_shakeKey) && g_currentListeningType != 4) ||
+                    ((modifiers == g_clickModifiers && wParam == g_clickKey) && g_currentListeningType != 5) ||
+                    ((modifiers == g_hideModifiers && wParam == g_hideKey) && g_currentListeningType != 6)) {
+                    SetWindowText(g_hCurrentDisplay, L"热键冲突，请重试");
+                    break;
+                }
                 // 根据当前监听类型更新对应的全局变量
                 switch (g_currentListeningType) {
                 case 1: // 透明度增加
@@ -583,6 +704,8 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                     g_centerModifiers = modifiers;
                     g_centerKey = (UINT)wParam;
                     break;
+                case 5: g_clickModifiers = modifiers; g_clickKey = (UINT)wParam; break;
+                case 6: g_hideModifiers = modifiers; g_hideKey = (UINT)wParam; break;
                 case 4: // 窗口抖动
                     g_shakeModifiers = modifiers;
                     g_shakeKey = (UINT)wParam;
@@ -658,6 +781,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     case WM_CLOSE:
         // 关闭设置窗口时，重新注册所有热键
         RegisterHotKeys(g_hMainWnd);
+        g_isListeningHotkey = FALSE;
         DestroyWindow(hwnd);
         g_hSettingsWnd = NULL;
         break;
@@ -701,6 +825,7 @@ void ShowContextMenu(HWND hwnd)
 {
     HMENU hMenu = CreatePopupMenu();
     AppendMenu(hMenu, MF_STRING, ID_TRAY_SETTINGS, L"设置");
+    AppendMenu(hMenu, MF_STRING, ID_TRAY_RESTORE, L"恢复所有窗口");
     AppendMenu(hMenu, MF_SEPARATOR, 0, NULL);
     AppendMenu(hMenu, MF_STRING, ID_TRAY_EXIT, L"退出");
 
@@ -733,7 +858,7 @@ void ShowSettingsWindow()
 
     // 计算窗口居中位置
     int windowWidth = 380;
-    int windowHeight = 420;
+    int windowHeight = 700;
     int screenWidth = GetSystemMetrics(SM_CXSCREEN);
     int screenHeight = GetSystemMetrics(SM_CYSCREEN);
     int x = (screenWidth - windowWidth) / 2;
@@ -763,6 +888,10 @@ void RegisterHotKeys(HWND hwnd)
     // 注销所有现有热键
     UnregisterHotKeys(hwnd);
 
+    if (g_recoveryAvailable && g_enableClick && !RegisterHotKey(hwnd, ID_HOTKEY_CLICK, g_clickModifiers | MOD_NOREPEAT, g_clickKey))
+        MessageBox(hwnd, L"鼠标穿透热键注册失败", L"警告", MB_OK | MB_ICONWARNING);
+    if (g_recoveryAvailable && g_enableHide && !RegisterHotKey(hwnd, ID_HOTKEY_HIDE, g_hideModifiers | MOD_NOREPEAT, g_hideKey))
+        MessageBox(hwnd, L"隐藏/展开热键注册失败", L"警告", MB_OK | MB_ICONWARNING);
     // 根据开关状态注册热键
     if (g_enableTransparencyUp) {
         if (!RegisterHotKey(hwnd, ID_HOTKEY_TRANSPARENCY_UP, g_transparencyUpModifiers, g_transparencyUpKey)) {
@@ -793,6 +922,8 @@ void UnregisterHotKeys(HWND hwnd)
     UnregisterHotKey(hwnd, ID_HOTKEY_TRANSPARENCY_DOWN);
     UnregisterHotKey(hwnd, ID_HOTKEY_CENTER_WINDOW);
     UnregisterHotKey(hwnd, ID_HOTKEY_SHAKE_WINDOW);
+    UnregisterHotKey(hwnd, ID_HOTKEY_CLICK);
+    UnregisterHotKey(hwnd, ID_HOTKEY_HIDE);
 }
 
 // 调整窗口透明度
@@ -833,14 +964,7 @@ HWND GetTopMostWindow()
 // 设置窗口透明度
 void SetWindowTransparency(HWND hwnd, int alpha)
 {
-    LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
-    if (alpha < 255) {
-        SetWindowLong(hwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
-        SetLayeredWindowAttributes(hwnd, 0, (BYTE)alpha, LWA_ALPHA);
-    }
-    else {
-        SetWindowLong(hwnd, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
-    }
+    if (!g_windows.SetAlpha(hwnd, alpha)) ReportFailure();
 }
 
 // 获取窗口透明度
@@ -852,7 +976,7 @@ int GetWindowTransparency(HWND hwnd)
         COLORREF colorKey;
         DWORD flags;
         if (GetLayeredWindowAttributes(hwnd, &colorKey, &alpha, &flags)) {
-            return (int)alpha;
+            return (flags & LWA_ALPHA) ? (int)alpha : 255;
         }
     }
     return 255; // 默认完全不透明
@@ -938,6 +1062,13 @@ void LoadConfig()
     g_enableCenter = GetPrivateProfileInt(L"Switches", L"EnableCenter", 0, CONFIG_FILE);
     g_enableShake = GetPrivateProfileInt(L"Switches", L"EnableShake", 0, CONFIG_FILE);
 
+    g_clickModifiers = GetPrivateProfileInt(L"Hotkeys", L"ClickThroughModifiers", MOD_CONTROL | MOD_ALT, CONFIG_FILE);
+    g_clickKey = GetPrivateProfileInt(L"Hotkeys", L"ClickThroughKey", 'T', CONFIG_FILE);
+    g_hideModifiers = GetPrivateProfileInt(L"Hotkeys", L"ToggleHiddenModifiers", MOD_CONTROL | MOD_ALT, CONFIG_FILE);
+    g_hideKey = GetPrivateProfileInt(L"Hotkeys", L"ToggleHiddenKey", 'H', CONFIG_FILE);
+    g_enableClick = GetPrivateProfileInt(L"Switches", L"EnableClickThrough", 1, CONFIG_FILE);
+    g_enableHide = GetPrivateProfileInt(L"Switches", L"EnableToggleHidden", 1, CONFIG_FILE);
+    g_windows.hideTaskbar = GetPrivateProfileInt(L"Settings", L"HideTaskbarWhenTransparent", 0, CONFIG_FILE) != 0;
     // 限制透明度步长范围
     if (g_transparencyStep < 1) g_transparencyStep = 1;
     if (g_transparencyStep > 50) g_transparencyStep = 50;
@@ -948,6 +1079,15 @@ void SaveConfig()
 {
     wchar_t value[32];
 
+    const wchar_t* keys[] = { L"ClickThroughModifiers", L"ClickThroughKey", L"ToggleHiddenModifiers", L"ToggleHiddenKey" };
+    UINT values[] = { g_clickModifiers, g_clickKey, g_hideModifiers, g_hideKey };
+    for (int i = 0; i < 4; ++i) {
+        swprintf(value, 32, L"%u", values[i]);
+        WritePrivateProfileString(L"Hotkeys", keys[i], value, CONFIG_FILE);
+    }
+    WritePrivateProfileString(L"Switches", L"EnableClickThrough", g_enableClick ? L"1" : L"0", CONFIG_FILE);
+    WritePrivateProfileString(L"Switches", L"EnableToggleHidden", g_enableHide ? L"1" : L"0", CONFIG_FILE);
+    WritePrivateProfileString(L"Settings", L"HideTaskbarWhenTransparent", g_windows.hideTaskbar ? L"1" : L"0", CONFIG_FILE);
     // 保存透明度步长
     swprintf(value, 32, L"%d", g_transparencyStep);
     WritePrivateProfileString(L"Settings", L"TransparencyStep", value, CONFIG_FILE);

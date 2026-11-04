@@ -1,7 +1,7 @@
 # Window2Clear
 
 - 一个轻量级的Windows桌面工具，用于控制窗口透明度、居中和抖动效果。
-- 基于C语言，调用Windows Api实现，超小体积，仅28kb，无需安装，打开即用。
+- 基于C++ / Win32 API，调用Windows Api实现，超小体积，仅28kb，无需安装，打开即用。
 
 ## 点击链接直接下载，无需安装开箱即用
 https://github.com/iwill123/Window2Clear/releases/download/v0.2.0/Window2Clear_v0.2.0.exe
@@ -53,3 +53,27 @@ https://github.com/iwill123/Window2Clear/releases/download/v0.2.0/Window2Clear_v
 ## 许可证
 
 开源项目，欢迎贡献代码和反馈问题。
+
+## 新增窗口控制
+
+- `Ctrl+Alt+T`：开启当前活动窗口的鼠标穿透；再次按下恢复上一个穿透窗口，即使焦点已切换。一次只穿透一个窗口。
+- `Ctrl+Alt+H`：隐藏当前活动窗口；再次按下展开已保存的窗口，恢复隐藏前的位置、普通/最大化/最小化状态。一次只隐藏一个窗口。
+- 设置中的“透明时隐藏任务栏按钮”默认关闭。开启后，透明度低于 255 时使用 ITaskbarList::DeleteTab 隐藏按钮，恢复完全不透明或关闭选项时使用 AddTab 恢复。不会设置 WS_EX_TOOLWINDOW，因此不主动改变 Alt+Tab 行为。
+- `Ctrl+Alt+F12`：固定的紧急恢复热键，恢复本程序修改过的所有窗口。打开设置期间仍保留；如果注册失败，穿透和隐藏功能暂停。托盘也有“恢复所有窗口”。
+- 两个新功能可分别启停、录入热键；热键录入拒绝本程序内重复组合和固定恢复键。外部冲突会在注册时提示。
+
+配置读取/保存于 exe 同目录的 `config.ini`，旧配置缺少新键时使用以上默认值。
+新增键：Settings/HideTaskbarWhenTransparent；Hotkeys/ClickThroughModifiers、ClickThroughKey、ToggleHiddenModifiers、ToggleHiddenKey；Switches/EnableClickThrough、EnableToggleHidden。
+修饰键数字沿用 Win32：Alt=1、Ctrl=2、Shift=4、Win=8，可相加。
+
+正常退出、托盘恢复和系统结束会话时会尝试恢复原始分层样式、alpha/色键、穿透样式、被本程序移除的任务栏按钮以及隐藏窗口的显示状态。窗口销毁后不会继续操作旧 HWND；额外的窗口属性标记防止误恢复复用的句柄。恢复失败时，托盘退出会保留程序供再次恢复。
+
+### Actions 编译与测试
+
+推送分支或创建 PR 会运行 Windows Server 2022 上的 MSVC v143 编译，覆盖 Debug/Release × Win32/x64，并运行原生窗口状态回归测试。Release 产物包含 exe 和默认 config.ini，可在对应 Actions run 的 Artifacts 下载。不自动发布 Release 或修改 main。
+
+### 已知限制
+
+仅支持可由当前权限操作的普通顶层窗口；管理员窗口需以相同权限运行。使用 UpdateLayeredWindow 的逐像素透明窗口无法可靠备份，程序拒绝修改。任务栏按钮由 Windows Shell 或目标程序管理，Explorer 重启或目标自行重建窗口/按钮可能覆盖效果，可关闭再开启选项重试。目标原本没有任务栏按钮（工具窗/有属主窗口）时不强制创建按钮。
+
+强制结束进程、崩溃或断电无法执行退出恢复；可重启目标应用恢复其自身窗口。热键展开/恢复会优先操作保存的 HWND，避免隐藏或穿透后焦点变化导致操作到其他窗口。正常退出只恢复本程序修改的样式位，不覆盖其他扩展样式。实际桌面点击穿透、Alt+Tab 与 Explorer 行为还需在 Windows 10/11 交互桌面验收。

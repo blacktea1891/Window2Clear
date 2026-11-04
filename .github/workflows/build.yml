@@ -1,0 +1,38 @@
+name: Windows build and tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [Win32, x64]
+        configuration: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - name: Build application
+        run: msbuild Window2Clear.sln /m /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }} /p:OutDir="${{ github.workspace }}\build\${{ matrix.platform }}\${{ matrix.configuration }}\\" /p:AdditionalOptions=/utf-8
+      - name: Compile and run native regression tests
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.platform == 'Win32' && 'x86' || 'amd64' }}
+          cl /nologo /EHsc /std:c++14 /utf-8 /DUNICODE /D_UNICODE tests\window_state_tests.cpp /Fe:build\window_state_tests.exe /link user32.lib
+          if errorlevel 1 exit /b 1
+          build\window_state_tests.exe
+      - name: Package default configuration
+        if: matrix.configuration == 'Release'
+        run: Copy-Item Window2Clear/config.ini build/${{ matrix.platform }}/Release/config.ini
+      - uses: actions/upload-artifact@v4
+        if: matrix.configuration == 'Release'
+        with:
+          name: Window2Clear-${{ matrix.platform }}
+          path: |
+            build/${{ matrix.platform }}/Release/Window2Clear.exe
+            build/${{ matrix.platform }}/Release/config.ini
+          if-no-files-found: error
