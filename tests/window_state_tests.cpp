@@ -4,9 +4,10 @@
 int wheelCount = 0;
 UINT wheelMessage = 0;
 WPARAM wheelParam = 0;
+HWND wheelWindow = nullptr;
 LRESULT CALLBACK WheelReceiver(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL) {
-        ++wheelCount; wheelMessage = msg; wheelParam = wp;
+        ++wheelCount; wheelMessage = msg; wheelParam = wp; wheelWindow = hwnd;
         return 0;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
@@ -31,7 +32,12 @@ struct TaskbarStub : ITaskbarList {
 
 int main() {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    HWND hwnd = CreateWindowExW(0, L"STATIC", L"Window2Clear test", WS_OVERLAPPEDWINDOW,
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc = WheelReceiver;
+    wc.hInstance = GetModuleHandle(nullptr);
+    wc.lpszClassName = L"Window2Clear.TestReceiver";
+    CHECK(RegisterClassW(&wc));
+    HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"Window2Clear test", WS_OVERLAPPEDWINDOW,
         100, 100, 400, 300, nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
     CHECK(hwnd);
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -40,15 +46,18 @@ int main() {
     CHECK(windows.SetAlpha(hwnd, 160));
     CHECK(windows.ToggleClick(hwnd));
     CHECK(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TRANSPARENT);
-    HWND child = CreateWindowExW(0, L"STATIC", L"Reading surface", WS_CHILD | WS_VISIBLE,
+    HWND child = CreateWindowExW(0, wc.lpszClassName, L"Reading surface", WS_CHILD | WS_VISIBLE,
         0, 0, 360, 240, hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
     CHECK(child);
-    SetWindowLongPtrW(child, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WheelReceiver));
     PumpMessages();
     HWND foreground = GetForegroundWindow();
     CHECK(windows.ForwardWheel(WM_MOUSEWHEEL, -WHEEL_DELTA, POINT{0,0}, 0, false));
+    MSG queued = {};
+    CHECK(PeekMessageW(&queued, nullptr, WM_MOUSEWHEEL, WM_MOUSEWHEEL, PM_NOREMOVE));
+    printf("Wheel queued: receiver=%p child=%p root=%p delta=%d\n", queued.hwnd, child, hwnd, (short)HIWORD(queued.wParam));
     PumpMessages();
     CHECK(wheelCount == 1 && (short)HIWORD(wheelParam) == -WHEEL_DELTA);
+    CHECK(wheelWindow == child);
     CHECK(GetForegroundWindow() == foreground);
     CHECK(windows.ForwardWheel(WM_MOUSEHWHEEL, 60, POINT{0,0}, MK_SHIFT, false));
     PumpMessages();
